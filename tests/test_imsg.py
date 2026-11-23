@@ -32,7 +32,7 @@ def build_fixture(d):
       (1,'any;-;+15550001111',null,'+15550001111','iMessage'),
       (2,'any;-;+15550001111',null,'+15550001111','SMS'),
       (3,'any;+;chat123',null,'chat123','iMessage'),
-      (4,'any;+;chat456','Book Club','chat456','iMessage'),
+      (4,'any;+;chat456','Book Club 🚀','chat456','iMessage'),
       (5,'any;-;ada@example.com',null,'ada@example.com','iMessage');
     insert into chat_handle_join values (1,1),(2,1),(3,1),(3,2),(4,2),(4,3),(5,3);
     """)
@@ -98,7 +98,7 @@ class Read(Base):
         out = json.loads(self.run_cli("--json", "chats").stdout)
         self.assertEqual(out[0]["chat"], "Grace Hopper")
         self.assertNotIn("Loved", out[0]["preview"])
-        self.assertIn("Book Club", [c["chat"] for c in out])
+        self.assertIn("Book Club 🚀", [c["chat"] for c in out])
 
     def test_read_by_name_merges_chats_oldest_first(self):
         msgs = json.loads(self.run_cli("--json", "read", "grace").stdout)
@@ -139,7 +139,8 @@ class Send(Base):
 
     def test_group_only_by_exact_name(self):
         self.set_mode("hitl")
-        self.assertIn("To: Book Club", self.run_cli("send", "Book Club", "hi", "--dry-run").stdout)
+        self.assertIn("To: Book Club 🚀", self.run_cli("send", "Book Club", "hi", "--dry-run").stdout)
+        self.assertIn("To: Book Club 🚀", self.run_cli("send", "BOOK CLUB", "hi", "--dry-run").stdout)
         self.assertNotEqual(self.run_cli("send", "Book", "hi", "--dry-run").returncode, 0)
 
     def test_ambiguous_recipient_errors(self):

@@ -298,6 +298,11 @@ def cmd_mode(ctx, a):
     print(f"mode: {cur} -> {a.new}")
 
 
+def loose(name):
+    """Case-, emoji- and punctuation-insensitive form of a group name."""
+    return " ".join(re.sub(r"[^\w\s]", " ", name.casefold()).split())
+
+
 def resolve_one_chat(ctx, who):
     """Strict matching for sends: 1:1 chats by contact/handle, groups only by their own name."""
     w = who.lower()
@@ -310,7 +315,7 @@ def resolve_one_chat(ctx, who):
     for cid, dn, guid in ctx.db.execute("select ROWID, display_name, guid from chat"):
         hs = members.get(cid, [])
         if dn:
-            if w == dn.lower():
+            if loose(who) and loose(who) == loose(dn):
                 ids.append(cid)
         elif len(hs) == 1:
             h = hs[0]
