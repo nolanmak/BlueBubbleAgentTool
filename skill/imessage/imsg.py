@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only iMessage CLI over ~/Library/Messages/chat.db.
+"""iMessage CLI over ~/Library/Messages/chat.db.
 
   imsg.py chats  [--limit 20]
   imsg.py read   <who> [--limit 50] [--since 7d]
@@ -9,7 +9,7 @@
   imsg.py mode   [read|hitl|yolo]             # show / change write mode
   --json on any command for machine output.
 """
-import argparse, datetime as dt, glob, json, os, re, sqlite3, subprocess, sys
+import argparse, datetime as dt, glob, json, os, re, sqlite3, subprocess, sys, time
 
 DB = os.path.expanduser(os.environ.get("IMSG_DB", "~/Library/Messages/chat.db"))
 AB = os.path.expanduser(os.environ.get("IMSG_ADDRESSBOOK", "~/Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb"))
@@ -18,6 +18,8 @@ CFG_DIR = os.path.expanduser(os.environ.get("IMSG_CONFIG_DIR", "~/.config/imsg")
 CFG = os.path.join(CFG_DIR, "config.json")
 LOG = os.path.join(CFG_DIR, "sent.log")
 MODES = ("read", "hitl", "yolo")  # strictest first
+SEND_TIMEOUT = int(os.environ.get("IMSG_SEND_TIMEOUT", "60"))
+CONFIRM_WAIT = int(os.environ.get("IMSG_CONFIRM_WAIT", "20"))
 DIALOG_TIMEOUT = int(os.environ.get("IMSG_DIALOG_TIMEOUT", "120"))
 
 
@@ -240,26 +242,52 @@ def osa(script, *args):
     return r.returncode, r.stdout.strip(), r.stderr.strip()
 
 
-def human_confirm(title, body, ok="Send"):
-    """Native macOS dialog; only a human click returns True. Times out to False."""
-    script = f"""on run argv
+def dialog_script(ok, timeout, dialog=None):
+    """AppleScript for the approval dialog. `dialog` lets tests stub out the real display dialog."""
+    dialog = dialog or (f'display dialog (item 2 of argv) with title (item 1 of argv) '
+                        f'buttons {{"Cancel", "{ok}"}} default button "Cancel" cancel button "Cancel" '
+                        f'with icon caution giving up after {timeout}')
+    return f"""on run argv
   activate
-  display dialog (item 2 of argv) with title (item 1 of argv) buttons {{"Cancel", "{ok}"}} \
-    default button "Cancel" cancel button "Cancel" with icon caution giving up after {DIALOG_TIMEOUT}
-  if gave up of result then return "timeout"
-  return button returned of result
+  try
+    set r to {dialog}
+  on error number -128
+    return "declined"
+  end try
+  if gave up of r then return "timeout"
+  return "button:" & (button returned of r)
 end run"""
-    rc, out, _ = osa(script, title, body)
-    return rc == 0 and out == ok
+
+
+def human_confirm(title, body, ok="Send", dialog=None):
+    """Native macOS dialog. Returns (status, detail): approved | declined | timeout | error."""
+    rc, out, err = osa(dialog_script(ok, DIALOG_TIMEOUT, dialog), title, body)
+    if rc != 0:
+        return "error", err or f"osascript exit {rc}"
+    if out == f"button:{ok}":
+        return "approved", ""
+    if out in ("declined", "timeout"):
+        return out, ""
+    return "error", f"unexpected dialog result {out!r}"
+
+
+def log_attempt(**fields):
+    os.makedirs(CFG_DIR, exist_ok=True)
+    with open(LOG, "a") as f:
+        f.write(json.dumps({"time": dt.datetime.now().astimezone().isoformat(timespec="seconds"), **fields},
+                           ensure_ascii=False) + "\n")
 
 
 def cmd_mode(ctx, a):
     cur = get_mode()
     if not a.new:
         print(cur); return
-    if MODES.index(a.new) > MODES.index(cur) and not human_confirm(
-            "iMessage write mode", f"Allow Claude to change iMessage mode from {cur} to {a.new}?", ok="Allow"):
-        sys.exit(f"Mode change to {a.new} not approved; still {cur}.")
+    if MODES.index(a.new) > MODES.index(cur):
+        status, detail = human_confirm(
+            "iMessage write mode", f"Allow Claude to change iMessage mode from {cur} to {a.new}?", ok="Allow")
+        log_attempt(action="mode", from_mode=cur, to_mode=a.new, status=status, detail=detail)
+        if status != "approved":
+            sys.exit(f"Mode change to {a.new} not approved ({status}{': ' + detail if detail else ''}); still {cur}.")
     set_mode(a.new)
     print(f"mode: {cur} -> {a.new}")
 
@@ -299,9 +327,33 @@ def resolve_one_chat(ctx, who):
     return ids[0], guid, svc
 
 
+SEND_SCRIPT = """on run argv
+  tell application "Messages" to send (item 1 of argv) to chat id (item 2 of argv)
+end run"""
+
+
+def confirm_in_db(chat_id, text, after_ns, wait_s):
+    """Poll chat.db for our outgoing message; osascript's exit code alone isn't proof of a send."""
+    deadline = time.time() + wait_s
+    while True:
+        db = connect()
+        for t, body, sent, err in db.execute(
+                "select m.text, m.attributedBody, m.is_sent, m.error from message m "
+                "join chat_message_join cmj on cmj.message_id = m.ROWID "
+                "where cmj.chat_id=? and m.is_from_me=1 and m.date>=?", (chat_id, after_ns)):
+            if (t or decode_body(body) or "").strip() == text.strip():
+                return ("error" if err else "confirmed"), (f"chat.db error {err}" if err else "")
+        db.close()
+        if time.time() >= deadline:
+            return "unconfirmed", f"not in chat.db after {wait_s}s"
+        time.sleep(1)
+
+
 def cmd_send(ctx, a):
     mode = get_mode()
+    base = {"action": "send", "mode": mode, "who": a.who}
     if mode == "read":
+        log_attempt(**base, status="refused", detail="read mode")
         sys.exit("Write mode is 'read': sending is disabled. The user can enable it with `imsg.py mode hitl`.")
     if a.who.startswith("any;"):
         row = ctx.db.execute("select ROWID, guid, service_name from chat where guid=?", (a.who,)).fetchone()
@@ -314,25 +366,36 @@ def cmd_send(ctx, a):
     text = a.text.replace("\\n", "\n")
     if not text.strip():
         sys.exit("Refusing to send an empty message.")
+    base.update(to=label, guid=guid, text=text)
     summary = f"To: {label} ({svc})\n\n{text}"
     if a.dry_run:
         print(f"[dry-run, mode={mode}] would send ->\n{summary}"); return
-    if mode == "hitl" and not human_confirm("Claude wants to send an iMessage", summary):
-        sys.exit("Not sent: declined or timed out in the approval dialog.")
-    rc, _, err = osa("""on run argv
-  tell application "Messages" to send (item 1 of argv) to chat id (item 2 of argv)
-end run""", text, guid)
-    os.makedirs(CFG_DIR, exist_ok=True)
-    with open(LOG, "a") as f:
-        f.write(json.dumps({"time": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-                            "mode": mode, "to": label, "guid": guid, "text": text, "ok": rc == 0, "err": err}) + "\n")
-    if rc != 0:
-        sys.exit(f"Send failed: {err}")
-    print(f"Sent to {label}.")
-
+    if mode == "hitl":
+        status, detail = human_confirm("Claude wants to send an iMessage", summary)
+        if status != "approved":
+            log_attempt(**base, status=status, detail=detail)
+            sys.exit(f"Not sent: approval dialog {status}{': ' + detail if detail else ''}.")
+    start_ns = int((dt.datetime.now(dt.timezone.utc) - EPOCH).total_seconds() * 1e9) - 5 * 10**9
+    # "--" stops osascript option parsing so text starting with "-" is treated as data.
+    try:
+        r = subprocess.run(["osascript", "-e", SEND_SCRIPT, "--", text, guid],
+                           capture_output=True, text=True, timeout=SEND_TIMEOUT)
+        rc, err = r.returncode, r.stderr.strip()
+    except subprocess.TimeoutExpired:
+        rc, err = None, f"osascript timed out after {SEND_TIMEOUT}s (often a pending macOS Automation prompt)"
+    status, detail = confirm_in_db(cid, text, start_ns, CONFIRM_WAIT if rc in (0, None) else 3)
+    if status != "confirmed" and err:
+        detail = f"{err}; {detail}"
+    log_attempt(**base, status=status, osascript_rc=rc, detail=detail)
+    if status == "confirmed":
+        print(f"Sent to {label} (confirmed in chat.db).")
+    elif status == "unconfirmed":
+        sys.exit(f"Send not confirmed: {detail}. It may still arrive. Check `imsg.py read` before retrying.")
+    else:
+        sys.exit(f"Send failed: {detail}")
 
 def main():
-    p = argparse.ArgumentParser(description="Read-only iMessage access")
+    p = argparse.ArgumentParser(description="iMessage access for agents")
     p.add_argument("--json", action="store_true")
     sp = p.add_subparsers(dest="cmd", required=True)
     c = sp.add_parser("chats"); c.add_argument("--limit", type=int, default=20)

@@ -164,5 +164,47 @@ class Send(Base):
         self.assertEqual(self.run_cli("mode").stdout.strip(), "read")
 
 
+@unittest.skipUnless(sys.platform == "darwin", "needs osascript")
+class Dialog(unittest.TestCase):
+    """Runs the real dialog AppleScript with `display dialog` stubbed by the record it returns."""
+
+    def check(self, stub, expected):
+        status, detail = imsg.human_confirm("t", "b", dialog=stub)
+        self.assertEqual(status, expected, detail)
+
+    def test_clicking_send_approves(self):  # regression: this path always failed before
+        self.check('{button returned:"Send", gave up:false}', "approved")
+
+    def test_timeout(self):
+        self.check('{button returned:"", gave up:true}', "timeout")
+
+    def test_cancel_is_declined(self):
+        self.check('run script "error number -128"', "declined")
+
+    def test_real_dialog_script_compiles(self):
+        r = subprocess.run(["osacompile", "-o", "/dev/null", "-e", imsg.dialog_script("Send", 5)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class SendLog(Base):
+    def log_lines(self):
+        with open(os.path.join(self.env["IMSG_CONFIG_DIR"], "sent.log")) as f:
+            return [json.loads(l) for l in f]
+
+    def test_refusal_is_logged(self):
+        self.set_mode("read")
+        self.run_cli("send", "Grace", "hi")
+        last = self.log_lines()[-1]
+        self.assertEqual((last["action"], last["status"]), ("send", "refused"))
+
+    def test_dialog_timeout_is_logged(self):
+        self.set_mode("hitl")
+        r = self.run_cli("send", "Grace", "hello there")
+        self.assertIn("timeout", r.stderr)
+        last = self.log_lines()[-1]
+        self.assertEqual((last["status"], last["to"], last["text"]), ("timeout", "Grace Hopper", "hello there"))
+
+
 if __name__ == "__main__":
     unittest.main()
