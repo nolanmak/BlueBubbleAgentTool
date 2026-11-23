@@ -261,7 +261,9 @@ end run"""
 
 def human_confirm(title, body, ok="Send", dialog=None):
     """Native macOS dialog. Returns (status, detail): approved | declined | timeout | error."""
+    t0 = time.time()
     rc, out, err = osa(dialog_script(ok, DIALOG_TIMEOUT, dialog), title, body)
+    human_confirm.elapsed = round(time.time() - t0, 1)
     if rc != 0:
         return "error", err or f"osascript exit {rc}"
     if out == f"button:{ok}":
@@ -285,7 +287,8 @@ def cmd_mode(ctx, a):
     if MODES.index(a.new) > MODES.index(cur):
         status, detail = human_confirm(
             "iMessage write mode", f"Allow Claude to change iMessage mode from {cur} to {a.new}?", ok="Allow")
-        log_attempt(action="mode", from_mode=cur, to_mode=a.new, status=status, detail=detail)
+        log_attempt(action="mode", from_mode=cur, to_mode=a.new, status=status, detail=detail,
+                    dialog_s=human_confirm.elapsed)
         if status != "approved":
             sys.exit(f"Mode change to {a.new} not approved ({status}{': ' + detail if detail else ''}); still {cur}.")
     set_mode(a.new)
@@ -373,7 +376,7 @@ def cmd_send(ctx, a):
     if mode == "hitl":
         status, detail = human_confirm("Claude wants to send an iMessage", summary)
         if status != "approved":
-            log_attempt(**base, status=status, detail=detail)
+            log_attempt(**base, status=status, detail=detail, dialog_s=human_confirm.elapsed)
             sys.exit(f"Not sent: approval dialog {status}{': ' + detail if detail else ''}.")
     start_ns = int((dt.datetime.now(dt.timezone.utc) - EPOCH).total_seconds() * 1e9) - 5 * 10**9
     # "--" stops osascript option parsing so text starting with "-" is treated as data.
@@ -386,7 +389,8 @@ def cmd_send(ctx, a):
     status, detail = confirm_in_db(cid, text, start_ns, CONFIRM_WAIT if rc in (0, None) else 3)
     if status != "confirmed" and err:
         detail = f"{err}; {detail}"
-    log_attempt(**base, status=status, osascript_rc=rc, detail=detail)
+    log_attempt(**base, status=status, osascript_rc=rc, detail=detail,
+                dialog_s=getattr(human_confirm, "elapsed", None) if mode == "hitl" else None)
     if status == "confirmed":
         print(f"Sent to {label} (confirmed in chat.db).")
     elif status == "unconfirmed":
