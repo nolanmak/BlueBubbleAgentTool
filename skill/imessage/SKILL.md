@@ -22,7 +22,7 @@ imsg.py --json <cmd> ...                       # structured output
 ## Write modes (stored in ~/.config/imsg/config.json, default hitl)
 - `read` — send refuses.
 - `hitl` — send pops a native macOS dialog showing recipient + text; the user must click Send
-  (Cancel / 120s timeout = not sent).
+  (Don't Send / 120s timeout = not sent).
 - `yolo` — sends immediately.
 - Loosening the mode (read→hitl→yolo) itself requires a dialog click; tightening doesn't.
 - Every send attempt is logged to ~/.config/imsg/sent.log.
