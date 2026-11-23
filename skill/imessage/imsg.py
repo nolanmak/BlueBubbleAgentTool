@@ -245,14 +245,14 @@ def osa(script, *args):
 def dialog_script(ok, timeout, dialog=None):
     """AppleScript for the approval dialog. `dialog` lets tests stub out the real display dialog."""
     dialog = dialog or (f'display dialog (item 2 of argv) with title (item 1 of argv) '
-                        f'buttons {{"Cancel", "{ok}"}} default button "Cancel" cancel button "Cancel" '
+                        f'buttons {{"Don\'t {ok}", "{ok}"}} default button "{ok}" '
                         f'with icon caution giving up after {timeout}')
     return f"""on run argv
   activate
   try
     set r to {dialog}
-  on error number -128
-    return "declined"
+  on error errMsg number errNum
+    return "error:" & errNum & " " & errMsg
   end try
   if gave up of r then return "timeout"
   return "button:" & (button returned of r)
@@ -266,11 +266,14 @@ def human_confirm(title, body, ok="Send", dialog=None):
     human_confirm.elapsed = round(time.time() - t0, 1)
     if rc != 0:
         return "error", err or f"osascript exit {rc}"
+    human_confirm.raw = out
     if out == f"button:{ok}":
         return "approved", ""
-    if out in ("declined", "timeout"):
-        return out, ""
-    return "error", f"unexpected dialog result {out!r}"
+    if out == f"button:Don't {ok}":
+        return "declined", ""
+    if out == "timeout":
+        return "timeout", ""
+    return "error", f"dialog returned {out!r}"
 
 
 def log_attempt(**fields):
@@ -376,7 +379,8 @@ def cmd_send(ctx, a):
     if mode == "hitl":
         status, detail = human_confirm("Claude wants to send an iMessage", summary)
         if status != "approved":
-            log_attempt(**base, status=status, detail=detail, dialog_s=human_confirm.elapsed)
+            log_attempt(**base, status=status, detail=detail, dialog_s=human_confirm.elapsed,
+                        dialog_raw=getattr(human_confirm, "raw", None))
             sys.exit(f"Not sent: approval dialog {status}{': ' + detail if detail else ''}.")
     start_ns = int((dt.datetime.now(dt.timezone.utc) - EPOCH).total_seconds() * 1e9) - 5 * 10**9
     # "--" stops osascript option parsing so text starting with "-" is treated as data.

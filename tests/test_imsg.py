@@ -178,8 +178,11 @@ class Dialog(unittest.TestCase):
     def test_timeout(self):
         self.check('{button returned:"", gave up:true}', "timeout")
 
-    def test_cancel_is_declined(self):
-        self.check('run script "error number -128"', "declined")
+    def test_dont_send_is_declined(self):
+        self.check('{button returned:"Don\'t Send", gave up:false}', "declined")
+
+    def test_dialog_error_is_reported_not_declined(self):
+        self.check('run script "error number -128"', "error")
 
     def test_real_dialog_script_compiles(self):
         r = subprocess.run(["osacompile", "-o", "/dev/null", "-e", imsg.dialog_script("Send", 5)],
