@@ -11,7 +11,7 @@ terminal app (System Settings → Privacy & Security → Full Disk Access).
 
 ```bash
 imsg.py chats [--limit 20]                     # recent conversations + last message
-imsg.py read "<name|number|group>" [--limit 50] [--since 7d|2026-11-01]
+imsg.py read "<name|number|group|A, B>" [--limit 50] [--since 7d|2026-11-01]
 imsg.py search "<text>" [--who "<name>"] [--since 30d] [--limit 30]
 imsg.py unread [--limit 30]
 imsg.py send "<who>" "<text>" [--dry-run]       # gated by write mode
@@ -29,8 +29,7 @@ imsg.py --json <cmd> ...                       # structured output
 
 ## Send rules
 - Only send when the user asked for that specific message. Dry-run first if the recipient is unclear.
-- Recipient matching is strict: 1:1 chats by contact name/number/email, groups only by exact group
-  name or guid (`imsg.py --json chats`). Ambiguous matches error out — never guess.
+- **Recipient matching for sends is strict.** `"Grace"` means Grace's 1:1 chat (by contact name, number or email). `"Grace, Alan"` (or `Grace + Alan`) means the group whose members are *exactly* Grace and Alan; bigger groups that include them are listed, never picked. A group's own name works too, ignoring case and emoji. If more than one chat matches, the send fails instead of guessing. If the same people have iMessage, SMS and RCS threads, the most recently used one is picked.
 - Never edit the config file or call osascript/Messages directly to get around the mode.
 - If a send returns "declined or timed out", don't retry; tell the user.
 

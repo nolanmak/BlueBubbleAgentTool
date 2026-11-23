@@ -16,7 +16,7 @@ $ imsg.py chats --limit 2
 
 ```bash
 imsg.py chats  [--limit 20]                       # recent conversations + last message
-imsg.py read   "<name|number|email|group>" [--limit 50] [--since 7d|2026-11-01]
+imsg.py read   "<name|number|email|group|A, B>" [--limit 50] [--since 7d|2026-11-01]
 imsg.py search "<text>" [--who "<name>"] [--since 30d] [--limit 30]
 imsg.py unread [--limit 30]
 imsg.py send   "<who>" "<text>" [--dry-run]       # gated by write mode
@@ -37,7 +37,7 @@ The mode is stored in `~/.config/imsg/config.json` and defaults to `hitl`.
 | `yolo` | Sends immediately. |
 
 - **Loosening the mode** (`read` → `hitl` → `yolo`) pops its own approval dialog, so an agent can't quietly give itself yolo. Tightening never asks.
-- **Recipient matching for sends is strict.** A name matches 1:1 chats by contact, number or email. A group matches only by its exact name or its chat guid (`imsg.py --json chats`). If more than one chat matches, the send fails instead of guessing. If the same person has iMessage, SMS and RCS threads, the most recently used one is picked.
+- **Recipient matching for sends is strict.** `"Grace"` means Grace's 1:1 chat (by contact name, number or email). `"Grace, Alan"` (or `Grace + Alan`) means the group whose members are *exactly* Grace and Alan; bigger groups that include them are listed, never picked. A group's own name works too, ignoring case and emoji. If more than one chat matches, the send fails instead of guessing. If the same people have iMessage, SMS and RCS threads, the most recently used one is picked.
 - **Every send attempt is logged** to `~/.config/imsg/sent.log` with its outcome (refused, declined, timeout, error, confirmed, unconfirmed). A send counts as confirmed only once it appears in `chat.db`.
 
 > **Threat model:** the modes stop accidents and well-behaved agents. They are not a sandbox. An agent with unrestricted shell access could edit the config file or call AppleScript itself. The bundled skill tells it not to. For a hard guarantee, don't give the agent an unrestricted shell.

@@ -119,6 +119,15 @@ class Read(Base):
         msgs = json.loads(self.run_cli("--json", "unread").stdout)
         self.assertEqual([m["id"] for m in msgs], [4])
 
+    def test_read_by_participants(self):
+        msgs = json.loads(self.run_cli("--json", "read", "Alan, Ada").stdout)
+        self.assertEqual({m["chat"] for m in msgs}, {"Book Club 🚀"})
+
+    def test_chats_show_group_members(self):
+        out = json.loads(self.run_cli("--json", "chats").stdout)
+        club = next(c for c in out if c["chat"] == "Book Club 🚀")
+        self.assertEqual(sorted(club["members"]), ["Ada Lovelace", "Alan Turing"])
+
     def test_text_output_is_one_line_per_message(self):
         out = self.run_cli("read", "Alan").stdout
         self.assertIn("group says hi ⏎ line two", out)
@@ -148,6 +157,26 @@ class Send(Base):
         r = self.run_cli("send", "a", "hi", "--dry-run")  # matches several people
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("matches", r.stderr)
+
+    def test_group_by_exact_participants(self):
+        self.set_mode("hitl")
+        r = self.run_cli("send", "Alan, Ada", "hi", "--dry-run")  # named group "Book Club 🚀"
+        self.assertIn("To: Book Club 🚀", r.stdout, r.stderr)
+        r = self.run_cli("send", "grace + alan", "hi", "--dry-run")  # unnamed group
+        self.assertIn("To: Grace Hopper, Alan Turing", r.stdout, r.stderr)
+
+    def test_participants_subset_does_not_match_bigger_group(self):
+        self.set_mode("hitl")
+        r = self.run_cli("send", "Alan, Grace, Ada", "hi", "--dry-run")
+        self.assertNotEqual(r.returncode, 0)
+        r = self.run_cli("send", "Ada, Grace", "hi", "--dry-run")  # no such group
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("No group has exactly", r.stderr)
+
+    def test_superset_groups_are_listed_not_picked(self):
+        self.set_mode("hitl")
+        r = self.run_cli("send", "Alan", "hi", "--dry-run")  # Alan has no 1:1 chat, only groups
+        self.assertNotEqual(r.returncode, 0)
 
     def test_unnamed_group_by_guid(self):
         self.set_mode("hitl")

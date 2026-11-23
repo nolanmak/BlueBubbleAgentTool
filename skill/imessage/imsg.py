@@ -97,6 +97,10 @@ def since_to_apple(s):
     return int((t - EPOCH).total_seconds() * 1e9)
 
 
+def split_people(who):
+    return [p.strip() for p in re.split(r"\s*(?:,|\+|&)\s*", who) if p.strip()]
+
+
 class Ctx:
     def __init__(self):
         self.db = connect()
@@ -115,8 +119,31 @@ class Ctx:
             return ", ".join(self.name(h) for h in hs)
         return row[1] if row else "?"
 
+    def members(self):
+        if not hasattr(self, "_members"):
+            self._members = {}
+            for cid, h in self.db.execute(
+                    "select j.chat_id, h.id from chat_handle_join j join handle h on h.ROWID=j.handle_id"):
+                self._members.setdefault(cid, []).append(h)
+        return self._members
+
+    def person_matches(self, q, handle):
+        q = q.strip().lower()
+        qn = norm(q) if re.search(r"\d{4}", q) else None
+        return bool(q) and (q in self.name(handle).lower() or q == handle.lower() or bool(qn and qn == norm(handle)))
+
+    def most_recent(self, ids):
+        return self.db.execute(
+            f"select cmj.chat_id from chat_message_join cmj join message m on m.ROWID=cmj.message_id "
+            f"where cmj.chat_id in ({','.join(map(str, ids))}) order by m.date desc limit 1").fetchone()[0]
+
     def match_chats(self, who):
-        """Chat ROWIDs whose name, participants, or identifier match `who`."""
+        """Chat ROWIDs whose name, participants, or identifier match `who`.
+        "A, B" (or "A + B") means chats that include every named person."""
+        people = split_people(who)
+        if len(people) > 1:
+            return {cid for cid, hs in self.members().items()
+                    if all(any(self.person_matches(q, h) for h in hs) for q in people)}
         w = who.lower()
         wn = norm(who) if re.search(r"\d{4}", who) else None
         out = set()
@@ -171,13 +198,15 @@ def cmd_chats(ctx, a):
         last = ctx.db.execute(MSG_SQL + " where cmj.chat_id=? and m.associated_message_type=0 order by m.date desc limit 1",
                               (cid,)).fetchone()
         m = row_to_msg(ctx, last) if last else {"text": "", "from": ""}
-        out.append({"chat": ctx.chat_label(cid), "guid": ctx.db.execute("select guid from chat where ROWID=?", (cid,)).fetchone()[0], "last": ts(d).isoformat(timespec="minutes"),
+        out.append({"chat": ctx.chat_label(cid), "members": [ctx.name(h) for h in ctx.members().get(cid, [])], "guid": ctx.db.execute("select guid from chat where ROWID=?", (cid,)).fetchone()[0], "last": ts(d).isoformat(timespec="minutes"),
                     "preview": f"{m['from']}: {m['text'][:80].replace(chr(10), ' ')}"})
     if a.json:
         print(json.dumps(out, ensure_ascii=False, indent=1))
     else:
         for c in out:
-            print(f"{c['last'][:16].replace('T', ' ')}  {c['chat']}\n    {c['preview']}")
+            who = ", ".join(c["members"])
+            extra = f"  ({who})" if c["members"] and who != c["chat"] else ""
+            print(f"{c['last'][:16].replace('T', ' ')}  {c['chat']}{extra}\n    {c['preview']}")
 
 
 def query_msgs(ctx, where, params, limit):
@@ -304,35 +333,43 @@ def loose(name):
 
 
 def resolve_one_chat(ctx, who):
-    """Strict matching for sends: 1:1 chats by contact/handle, groups only by their own name."""
-    w = who.lower()
-    wn = norm(who) if re.search(r"\d{4}", who) else None
-    members = {}
-    for cid, h in ctx.db.execute(
-            "select j.chat_id, h.id from chat_handle_join j join handle h on h.ROWID=j.handle_id"):
-        members.setdefault(cid, []).append(h)
+    """Strict matching for sends. "Name" → that person's 1:1 chat or a group with that name.
+    "A, B" → the group whose members are exactly A and B (each name must match one member)."""
+    members = ctx.members()
+    people = split_people(who)
     ids = []
-    for cid, dn, guid in ctx.db.execute("select ROWID, display_name, guid from chat"):
-        hs = members.get(cid, [])
-        if dn:
-            if loose(who) and loose(who) == loose(dn):
+    if len(people) > 1:
+        supersets = []
+        for cid, hs in members.items():
+            if not all(any(ctx.person_matches(q, h) for h in hs) for q in people):
+                continue
+            exact = len(hs) == len(people) and all(any(ctx.person_matches(q, h) for q in people) for h in hs)
+            (ids if exact else supersets).append(cid)
+        if not ids:
+            hint = ""
+            if supersets:
+                opts = "\n  ".join(f"{ctx.chat_label(i)} [{', '.join(ctx.name(h) for h in members[i])}]  "
+                                   f"guid={ctx.db.execute('select guid from chat where ROWID=?', (i,)).fetchone()[0]}"
+                                   for i in supersets[:15])
+                hint = f"\nGroups that also include other people (send by guid if you mean one):\n  {opts}"
+            sys.exit(f"No group has exactly: {', '.join(people)}.{hint}")
+    else:
+        for cid, dn in ctx.db.execute("select ROWID, display_name from chat"):
+            hs = members.get(cid, [])
+            if dn:
+                if loose(who) and loose(who) == loose(dn):
+                    ids.append(cid)
+            elif len(hs) == 1 and ctx.person_matches(who, hs[0]):
                 ids.append(cid)
-        elif len(hs) == 1:
-            h = hs[0]
-            if w in ctx.name(h).lower() or w == h.lower() or (wn and wn == norm(h)):
-                ids.append(cid)
-    if not ids:
-        sys.exit(f"No 1:1 chat or exactly-named group matches '{who}'. "
-                 "For an unnamed group, pass its guid (see `imsg.py --json chats`).")
+        if not ids:
+            sys.exit(f"No 1:1 chat or group named '{who}'. For a group, list its members: \"A, B\".")
     if len(ids) > 1:
-        # same person on several services (iMessage/SMS/RCS): pick the most recently used chat
-        people = {ctx.name(members[i][0]) for i in ids if len(members.get(i, [])) == 1}
-        if len(people) == 1 and all(len(members.get(i, [])) == 1 for i in ids):
-            ids = [ctx.db.execute(
-                f"select cmj.chat_id from chat_message_join cmj join message m on m.ROWID=cmj.message_id "
-                f"where cmj.chat_id in ({','.join(map(str, ids))}) order by m.date desc limit 1").fetchone()[0]]
+        # same people on several services (iMessage/SMS/RCS): pick the most recently used chat
+        sets = {frozenset(ctx.name(h) for h in members.get(i, [])) for i in ids}
+        if len(sets) == 1:
+            ids = [ctx.most_recent(ids)]
         else:
-            opts = "\n  ".join(f"{ctx.chat_label(i)}" for i in ids[:15])
+            opts = "\n  ".join(f"{ctx.chat_label(i)} [{', '.join(ctx.name(h) for h in members.get(i, []))}]" for i in ids[:15])
             sys.exit(f"'{who}' matches {len(ids)} different chats; be more specific:\n  {opts}")
     guid, svc = ctx.db.execute("select guid, service_name from chat where ROWID=?", (ids[0],)).fetchone()
     return ids[0], guid, svc
