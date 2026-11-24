@@ -2,7 +2,7 @@
 # Symlink the imessage skill into Claude Code (and Codex, if installed).
 set -e
 SRC="$(cd "$(dirname "$0")" && pwd)/skill/imessage"
-chmod +x "$SRC/imsg.py"
+chmod +x "$SRC/bluebubble.py"
 for d in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
   [ -d "$(dirname "$d")" ] || continue
   mkdir -p "$d"

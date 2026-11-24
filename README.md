@@ -1,34 +1,36 @@
-# imsg
+# BlueBubbleAgentTool
 
 Let Claude Code (or Codex, or any agent with a shell) **read your iMessages** on macOS, and **send them only when you allow it**.
 
-`imsg` is a single-file Python CLI plus an agent skill. It reads `~/Library/Messages/chat.db` in read-only mode, resolves names from your macOS Contacts, and sends through Messages.app. There are no dependencies beyond the Python 3 that ships with macOS.
+`bluebubble` is a single-file Python CLI plus an agent skill. It reads `~/Library/Messages/chat.db` in read-only mode, resolves names from your macOS Contacts, and sends through Messages.app. There are no dependencies beyond the Python 3 that ships with macOS.
 
 ```text
-$ imsg.py chats --limit 2
+$ bluebubble.py chats --limit 2
 2026-11-23 10:22  Grace Hopper
     Grace Hopper: found the bug, it was a moth
 2026-11-23 09:35  Book Club
     me: next week works
 ```
 
+> Not affiliated with [BlueBubbles](https://bluebubbles.app). This tool needs no server and keeps System Integrity Protection on; it uses only `chat.db` and AppleScript.
+
 ## Commands
 
 ```bash
-imsg.py chats  [--limit 20]                       # recent conversations + last message
-imsg.py read   "<name|number|email|group|A, B>" [--limit 50] [--since 7d|2026-11-01]
-imsg.py search "<text>" [--who "<name>"] [--since 30d] [--limit 30]
-imsg.py unread [--limit 30]
-imsg.py send   "<who>" "<text>" [--dry-run]       # gated by write mode
-imsg.py mode   [read|hitl|yolo]                   # show / change write mode
-imsg.py --json <command> ...                      # structured output for agents
+bluebubble.py chats  [--limit 20]                       # recent conversations + last message
+bluebubble.py read   "<name|number|email|group|A, B>" [--limit 50] [--since 7d|2026-11-01]
+bluebubble.py search "<text>" [--who "<name>"] [--since 30d] [--limit 30]
+bluebubble.py unread [--limit 30]
+bluebubble.py send   "<who>" "<text>" [--dry-run]       # gated by write mode
+bluebubble.py mode   [read|hitl|yolo]                   # show / change write mode
+bluebubble.py --json <command> ...                      # structured output for agents
 ```
 
-Most message text on recent macOS lives in an `attributedBody` blob, not the `text` column. `imsg` decodes it, so reading and search see all of your messages. Tapback reactions are hidden.
+Most message text on recent macOS lives in an `attributedBody` blob, not the `text` column. `bluebubble` decodes it, so reading and search see all of your messages. Tapback reactions are hidden.
 
 ## Write modes
 
-The mode is stored in `~/.config/imsg/config.json` and defaults to `hitl`.
+The mode is stored in `~/.config/bluebubble/config.json` and defaults to `hitl`.
 
 | Mode   | `send` behavior |
 |--------|-----------------|
@@ -38,15 +40,15 @@ The mode is stored in `~/.config/imsg/config.json` and defaults to `hitl`.
 
 - **Loosening the mode** (`read` → `hitl` → `yolo`) pops its own approval dialog, so an agent can't quietly give itself yolo. Tightening never asks.
 - **Recipient matching for sends is strict.** `"Grace"` means Grace's 1:1 chat (by contact name, number or email). `"Grace, Alan"` (or `Grace + Alan`) means the group whose members are *exactly* Grace and Alan; bigger groups that include them are listed, never picked. A group's own name works too, ignoring case and emoji. If more than one chat matches, the send fails instead of guessing. If the same people have iMessage, SMS and RCS threads, the most recently used one is picked.
-- **Every send attempt is logged** to `~/.config/imsg/sent.log` with its outcome (refused, declined, timeout, error, confirmed, unconfirmed). A send counts as confirmed only once it appears in `chat.db`.
+- **Every send attempt is logged** to `~/.config/bluebubble/sent.log` with its outcome (refused, declined, timeout, error, confirmed, unconfirmed). A send counts as confirmed only once it appears in `chat.db`.
 
 > **Threat model:** the modes stop accidents and well-behaved agents. They are not a sandbox. An agent with unrestricted shell access could edit the config file or call AppleScript itself. The bundled skill tells it not to. For a hard guarantee, don't give the agent an unrestricted shell.
 
 ## Install
 
 ```bash
-git clone https://github.com/nolanmak/imsg ~/imsg
-~/imsg/install.sh        # symlinks the skill into ~/.claude/skills (and ~/.codex/skills if present)
+git clone https://github.com/nolanmak/BlueBubbleAgentTool ~/BlueBubbleAgentTool
+~/BlueBubbleAgentTool/install.sh        # symlinks the skill into ~/.claude/skills (and ~/.codex/skills if present)
 ```
 
 Then:
@@ -65,7 +67,7 @@ The safety gate is a native dialog that only a human can click. That works the s
 python3 -m unittest discover -s tests -v
 ```
 
-The tests build a synthetic `chat.db` and AddressBook, so they never touch your real messages. Set `IMSG_DB`, `IMSG_ADDRESSBOOK` and `IMSG_CONFIG_DIR` to point the CLI somewhere else.
+The tests build a synthetic `chat.db` and AddressBook, so they never touch your real messages. Set `BUBBLE_DB`, `BUBBLE_ADDRESSBOOK` and `BUBBLE_CONFIG_DIR` to point the CLI somewhere else.
 
 ## License
 

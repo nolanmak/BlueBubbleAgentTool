@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """iMessage CLI over ~/Library/Messages/chat.db.
 
-  imsg.py chats  [--limit 20]
-  imsg.py read   <who> [--limit 50] [--since 7d]
-  imsg.py search <text> [--who X] [--limit 30] [--since 30d]
-  imsg.py unread [--limit 30]
-  imsg.py send   <who> <text> [--dry-run]     # gated by write mode
-  imsg.py mode   [read|hitl|yolo]             # show / change write mode
+  bluebubble.py chats  [--limit 20]
+  bluebubble.py read   <who> [--limit 50] [--since 7d]
+  bluebubble.py search <text> [--who X] [--limit 30] [--since 30d]
+  bluebubble.py unread [--limit 30]
+  bluebubble.py send   <who> <text> [--dry-run]     # gated by write mode
+  bluebubble.py mode   [read|hitl|yolo]             # show / change write mode
   --json on any command for machine output.
 """
 import argparse, datetime as dt, glob, json, os, re, sqlite3, subprocess, sys, time
 
-DB = os.path.expanduser(os.environ.get("IMSG_DB", "~/Library/Messages/chat.db"))
-AB = os.path.expanduser(os.environ.get("IMSG_ADDRESSBOOK", "~/Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb"))
+DB = os.path.expanduser(os.environ.get("BUBBLE_DB", "~/Library/Messages/chat.db"))
+AB = os.path.expanduser(os.environ.get("BUBBLE_ADDRESSBOOK", "~/Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb"))
 EPOCH = dt.datetime(2001, 1, 1, tzinfo=dt.timezone.utc)
-CFG_DIR = os.path.expanduser(os.environ.get("IMSG_CONFIG_DIR", "~/.config/imsg"))
+CFG_DIR = os.path.expanduser(os.environ.get("BUBBLE_CONFIG_DIR", "~/.config/bluebubble"))
 CFG = os.path.join(CFG_DIR, "config.json")
 LOG = os.path.join(CFG_DIR, "sent.log")
 MODES = ("read", "hitl", "yolo")  # strictest first
-SEND_TIMEOUT = int(os.environ.get("IMSG_SEND_TIMEOUT", "60"))
-CONFIRM_WAIT = int(os.environ.get("IMSG_CONFIRM_WAIT", "20"))
-DIALOG_TIMEOUT = int(os.environ.get("IMSG_DIALOG_TIMEOUT", "120"))
+SEND_TIMEOUT = int(os.environ.get("BUBBLE_SEND_TIMEOUT", "60"))
+CONFIRM_WAIT = int(os.environ.get("BUBBLE_CONFIRM_WAIT", "20"))
+DIALOG_TIMEOUT = int(os.environ.get("BUBBLE_DIALOG_TIMEOUT", "120"))
 
 
 def connect():
@@ -218,7 +218,7 @@ def query_msgs(ctx, where, params, limit):
 def chat_filter(ctx, who):
     ids = ctx.match_chats(who)
     if not ids:
-        sys.exit(f"No chat matches '{who}'. Try `imsg.py chats`.")
+        sys.exit(f"No chat matches '{who}'. Try `bluebubble.py chats`.")
     return f" and cmj.chat_id in ({','.join(map(str, ids))})", []
 
 
@@ -402,7 +402,7 @@ def cmd_send(ctx, a):
     base = {"action": "send", "mode": mode, "who": a.who}
     if mode == "read":
         log_attempt(**base, status="refused", detail="read mode")
-        sys.exit("Write mode is 'read': sending is disabled. The user can enable it with `imsg.py mode hitl`.")
+        sys.exit("Write mode is 'read': sending is disabled. The user can enable it with `bluebubble.py mode hitl`.")
     if a.who.startswith("any;"):
         row = ctx.db.execute("select ROWID, guid, service_name from chat where guid=?", (a.who,)).fetchone()
         if not row:
@@ -440,7 +440,7 @@ def cmd_send(ctx, a):
     if status == "confirmed":
         print(f"Sent to {label} (confirmed in chat.db).")
     elif status == "unconfirmed":
-        sys.exit(f"Send not confirmed: {detail}. It may still arrive. Check `imsg.py read` before retrying.")
+        sys.exit(f"Send not confirmed: {detail}. It may still arrive. Check `bluebubble.py read` before retrying.")
     else:
         sys.exit(f"Send failed: {detail}")
 

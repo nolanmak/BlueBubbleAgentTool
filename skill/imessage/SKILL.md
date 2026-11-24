@@ -5,27 +5,27 @@ description: Read and (when allowed) send the user's iMessages/SMS on this Mac �
 
 # iMessage
 
-CLI: `python3 ~/.claude/skills/imessage/imsg.py` — reads `~/Library/Messages/chat.db`
+CLI: `python3 ~/.claude/skills/imessage/bluebubble.py` — reads `~/Library/Messages/chat.db`
 in read-only mode and resolves names from macOS Contacts. Needs Full Disk Access for the
 terminal app (System Settings → Privacy & Security → Full Disk Access).
 
 ```bash
-imsg.py chats [--limit 20]                     # recent conversations + last message
-imsg.py read "<name|number|group|A, B>" [--limit 50] [--since 7d|2026-11-01]
-imsg.py search "<text>" [--who "<name>"] [--since 30d] [--limit 30]
-imsg.py unread [--limit 30]
-imsg.py send "<who>" "<text>" [--dry-run]       # gated by write mode
-imsg.py mode [read|hitl|yolo]                  # show / change write mode
-imsg.py --json <cmd> ...                       # structured output
+bluebubble.py chats [--limit 20]                     # recent conversations + last message
+bluebubble.py read "<name|number|group|A, B>" [--limit 50] [--since 7d|2026-11-01]
+bluebubble.py search "<text>" [--who "<name>"] [--since 30d] [--limit 30]
+bluebubble.py unread [--limit 30]
+bluebubble.py send "<who>" "<text>" [--dry-run]       # gated by write mode
+bluebubble.py mode [read|hitl|yolo]                  # show / change write mode
+bluebubble.py --json <cmd> ...                       # structured output
 ```
 
-## Write modes (stored in ~/.config/imsg/config.json, default hitl)
+## Write modes (stored in ~/.config/bluebubble/config.json, default hitl)
 - `read` — send refuses.
 - `hitl` — send pops a native macOS dialog showing recipient + text; the user must click Send
   (Don't Send / 120s timeout = not sent).
 - `yolo` — sends immediately.
 - Loosening the mode (read→hitl→yolo) itself requires a dialog click; tightening doesn't.
-- Every send attempt is logged to ~/.config/imsg/sent.log.
+- Every send attempt is logged to ~/.config/bluebubble/sent.log.
 
 ## Send rules
 - Only send when the user asked for that specific message. Dry-run first if the recipient is unclear.

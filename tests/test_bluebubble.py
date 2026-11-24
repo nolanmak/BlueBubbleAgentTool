@@ -2,9 +2,9 @@
 import json, os, sqlite3, subprocess, sys, tempfile, unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPT = os.path.join(ROOT, "skill", "imessage", "imsg.py")
+SCRIPT = os.path.join(ROOT, "skill", "imessage", "bluebubble.py")
 sys.path.insert(0, os.path.dirname(SCRIPT))
-import imsg  # noqa: E402
+import bluebubble as imsg  # noqa: E402
 
 NS = 10**9
 T0 = 785_000_000  # seconds since 2001-01-01 (late 2025)
@@ -67,17 +67,17 @@ class Base(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         build_fixture(cls.tmp.name)
         cls.env = dict(os.environ,
-                       IMSG_DB=os.path.join(cls.tmp.name, "chat.db"),
-                       IMSG_ADDRESSBOOK=os.path.join(cls.tmp.name, "Sources/*/AddressBook-v22.abcddb"),
-                       IMSG_CONFIG_DIR=os.path.join(cls.tmp.name, "cfg"),
-                       IMSG_DIALOG_TIMEOUT="1")
+                       BUBBLE_DB=os.path.join(cls.tmp.name, "chat.db"),
+                       BUBBLE_ADDRESSBOOK=os.path.join(cls.tmp.name, "Sources/*/AddressBook-v22.abcddb"),
+                       BUBBLE_CONFIG_DIR=os.path.join(cls.tmp.name, "cfg"),
+                       BUBBLE_DIALOG_TIMEOUT="1")
 
     def run_cli(self, *args):
         return subprocess.run([sys.executable, SCRIPT, *args], env=self.env, capture_output=True, text=True)
 
     def set_mode(self, m):
-        os.makedirs(self.env["IMSG_CONFIG_DIR"], exist_ok=True)
-        with open(os.path.join(self.env["IMSG_CONFIG_DIR"], "config.json"), "w") as f:
+        os.makedirs(self.env["BUBBLE_CONFIG_DIR"], exist_ok=True)
+        with open(os.path.join(self.env["BUBBLE_CONFIG_DIR"], "config.json"), "w") as f:
             json.dump({"mode": m}, f)
 
 
@@ -222,7 +222,7 @@ class Dialog(unittest.TestCase):
 
 class SendLog(Base):
     def log_lines(self):
-        with open(os.path.join(self.env["IMSG_CONFIG_DIR"], "sent.log")) as f:
+        with open(os.path.join(self.env["BUBBLE_CONFIG_DIR"], "sent.log")) as f:
             return [json.loads(l) for l in f]
 
     def test_refusal_is_logged(self):
