@@ -14,7 +14,7 @@ bluebubble.py chats [--limit 20]                     # recent conversations + la
 bluebubble.py read "<name|number|group|A, B>" [--limit 50] [--since 7d|2026-11-01]
 bluebubble.py search "<text>" [--who "<name>"] [--since 30d] [--limit 30]
 bluebubble.py unread [--limit 30]
-bluebubble.py send "<who>" "<text>" [--dry-run]       # gated by write mode
+bluebubble.py send "<who>" ["<text>"] [--file PATH ...] [--dry-run]   # gated by write mode
 bluebubble.py mode [read|hitl|yolo]                  # show / change write mode
 bluebubble.py --json <cmd> ...                       # structured output
 ```
@@ -26,6 +26,11 @@ bluebubble.py --json <cmd> ...                       # structured output
 - `yolo` — sends immediately.
 - Loosening the mode (read→hitl→yolo) itself requires a dialog click; tightening doesn't.
 - Every send attempt is logged to ~/.config/bluebubble/sent.log.
+
+## Attachments
+- Received files: `--json read` gives each attachment's `path`, `mime` and `bytes`; open the path to look at it.
+- Sending files: `--file PATH` (repeatable), with or without text. Up to 100 MB each.
+- A failed multi-item send reports what already went out; never resend those.
 
 ## Send rules
 - Only send when the user asked for that specific message. Dry-run first if the recipient is unclear.

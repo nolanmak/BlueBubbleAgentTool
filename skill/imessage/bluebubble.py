@@ -5,7 +5,7 @@
   bluebubble.py read   <who> [--limit 50] [--since 7d]
   bluebubble.py search <text> [--who X] [--limit 30] [--since 30d]
   bluebubble.py unread [--limit 30]
-  bluebubble.py send   <who> <text> [--dry-run]     # gated by write mode
+  bluebubble.py send   <who> [text] [--file PATH ...] [--dry-run]   # gated by write mode
   bluebubble.py mode   [read|hitl|yolo]             # show / change write mode
   --json on any command for machine output.
 """
@@ -166,19 +166,33 @@ left join handle h on h.ROWID = m.handle_id
 """
 
 
+def attachments_for(ctx, message_id):
+    out = []
+    for name, path, mime, size in ctx.db.execute(
+            "select a.transfer_name, a.filename, a.mime_type, a.total_bytes from attachment a "
+            "join message_attachment_join j on j.attachment_id = a.ROWID where j.message_id = ?", (message_id,)):
+        out.append({"name": name, "path": os.path.expanduser(path) if path else None, "mime": mime, "bytes": size})
+    return out
+
+
 def row_to_msg(ctx, r):
     text = r[3] or decode_body(r[4]) or ""
-    text = text.replace("￼", "").strip()
-    if r[7] and not text:
-        text = "[attachment]"
+    text = text.replace("\ufffc", "").strip()
+    atts = attachments_for(ctx, r[0]) if r[7] else []
+    if atts:
+        tag = " ".join(f"[attachment: {a['name'] or 'unnamed'}]" for a in atts)
+        text = f"{text} {tag}".strip()
     elif r[7]:
-        text += " [attachment]"
+        text = f"{text} [attachment]".strip()
     t = ts(r[1])
-    return {
+    msg = {
         "id": r[0], "time": t.isoformat(timespec="minutes") if t else None,
         "from": "me" if r[2] else ctx.name(r[5]), "chat": ctx.chat_label(r[6]),
         "text": text, "read": bool(r[8]) or bool(r[2]),
     }
+    if atts:
+        msg["attachments"] = atts
+    return msg
 
 
 def print_msgs(msgs, as_json, show_chat=True):
@@ -375,6 +389,60 @@ def resolve_one_chat(ctx, who):
     return ids[0], guid, svc
 
 
+SEND_FILE_SCRIPT = """on run argv
+  set f to POSIX file (item 1 of argv)
+  tell application "Messages" to send f to chat id (item 2 of argv)
+end run"""
+MAX_FILE_BYTES = 100 * 1024 * 1024
+STAGING = os.path.expanduser(os.environ.get("BUBBLE_STAGING", "~/Library/Messages/Attachments/bluebubble"))
+
+
+def stage_file(path):
+    """Messages can't read files from most locations (fails with error 25), so copy the file
+    into its own attachments folder first. The copy is kept: the sent message points at it."""
+    import shutil, uuid
+    d = os.path.join(STAGING, str(uuid.uuid4()))
+    os.makedirs(d)
+    dest = os.path.join(d, os.path.basename(path))
+    shutil.copy2(path, dest)
+    return dest
+
+
+def confirm_file_in_db(chat_id, name, after_ns, wait_s):
+    """Wait for our outgoing attachment to finish transferring (state 5) or fail."""
+    deadline = time.time() + wait_s
+    seen = False
+    while True:
+        db = connect()
+        rows = db.execute(
+            "select a.transfer_state, m.error from attachment a "
+            "join message_attachment_join j on j.attachment_id = a.ROWID "
+            "join message m on m.ROWID = j.message_id "
+            "join chat_message_join cmj on cmj.message_id = m.ROWID "
+            "where cmj.chat_id=? and m.is_from_me=1 and m.date>=? and a.transfer_name=?",
+            (chat_id, after_ns, name)).fetchall()
+        db.close()
+        for state, err in rows:
+            seen = True
+            if err:
+                return "error", f"Messages error {err} for {name}"
+            if state == 5:
+                return "confirmed", ""
+            if state == 6:
+                return "error", f"transfer failed for {name}"
+        if time.time() >= deadline:
+            return "unconfirmed", (f"{name} still transferring after {wait_s}s" if seen
+                                   else f"{name} not in chat.db after {wait_s}s")
+        time.sleep(1)
+
+
+def human_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
 SEND_SCRIPT = """on run argv
   tell application "Messages" to send (item 1 of argv) to chat id (item 2 of argv)
 end run"""
@@ -397,12 +465,30 @@ def confirm_in_db(chat_id, text, after_ns, wait_s):
         time.sleep(1)
 
 
+def run_osa(script, *args):
+    try:
+        r = subprocess.run(["osascript", "-e", script, "--", *args],
+                           capture_output=True, text=True, timeout=SEND_TIMEOUT)
+        return r.returncode, r.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return None, f"osascript timed out after {SEND_TIMEOUT}s (often a pending macOS Automation prompt)"
+
+
 def cmd_send(ctx, a):
     mode = get_mode()
     base = {"action": "send", "mode": mode, "who": a.who}
     if mode == "read":
         log_attempt(**base, status="refused", detail="read mode")
         sys.exit("Write mode is 'read': sending is disabled. The user can enable it with `bluebubble.py mode hitl`.")
+    files = []
+    for f in a.file or []:
+        f = os.path.abspath(os.path.expanduser(f))
+        if not os.path.isfile(f):
+            sys.exit(f"Not a file: {f}")
+        size = os.path.getsize(f)
+        if size > MAX_FILE_BYTES:
+            sys.exit(f"{os.path.basename(f)} is {human_size(size)}; iMessage's limit is {human_size(MAX_FILE_BYTES)}.")
+        files.append((f, size))
     if a.who.startswith("any;"):
         row = ctx.db.execute("select ROWID, guid, service_name from chat where guid=?", (a.who,)).fetchone()
         if not row:
@@ -411,11 +497,15 @@ def cmd_send(ctx, a):
     else:
         cid, guid, svc = resolve_one_chat(ctx, a.who)
     label = ctx.chat_label(cid)
-    text = a.text.replace("\\n", "\n")
-    if not text.strip():
+    text = (a.text or "").replace("\\n", "\n")
+    if not text.strip() and not files:
         sys.exit("Refusing to send an empty message.")
-    base.update(to=label, guid=guid, text=text)
-    summary = f"To: {label} ({svc})\n\n{text}"
+    base.update(to=label, guid=guid, text=text, files=[f for f, _ in files])
+    lines = [f"To: {label} ({svc})", ""]
+    if text.strip():
+        lines.append(text)
+    lines += [f"📎 {os.path.basename(f)} ({human_size(n)})" for f, n in files]
+    summary = "\n".join(lines)
     if a.dry_run:
         print(f"[dry-run, mode={mode}] would send ->\n{summary}"); return
     if mode == "hitl":
@@ -424,25 +514,44 @@ def cmd_send(ctx, a):
             log_attempt(**base, status=status, detail=detail, dialog_s=human_confirm.elapsed,
                         dialog_raw=getattr(human_confirm, "raw", None))
             sys.exit(f"Not sent: approval dialog {status}{': ' + detail if detail else ''}.")
-    start_ns = int((dt.datetime.now(dt.timezone.utc) - EPOCH).total_seconds() * 1e9) - 5 * 10**9
-    # "--" stops osascript option parsing so text starting with "-" is treated as data.
-    try:
-        r = subprocess.run(["osascript", "-e", SEND_SCRIPT, "--", text, guid],
-                           capture_output=True, text=True, timeout=SEND_TIMEOUT)
-        rc, err = r.returncode, r.stderr.strip()
-    except subprocess.TimeoutExpired:
-        rc, err = None, f"osascript timed out after {SEND_TIMEOUT}s (often a pending macOS Automation prompt)"
-    status, detail = confirm_in_db(cid, text, start_ns, CONFIRM_WAIT if rc in (0, None) else 3)
-    if status != "confirmed" and err:
-        detail = f"{err}; {detail}"
-    log_attempt(**base, status=status, osascript_rc=rc, detail=detail,
-                dialog_s=getattr(human_confirm, "elapsed", None) if mode == "hitl" else None)
-    if status == "confirmed":
-        print(f"Sent to {label} (confirmed in chat.db).")
-    elif status == "unconfirmed":
-        sys.exit(f"Send not confirmed: {detail}. It may still arrive. Check `bluebubble.py read` before retrying.")
-    else:
-        sys.exit(f"Send failed: {detail}")
+    dialog_s = getattr(human_confirm, "elapsed", None) if mode == "hitl" else None
+
+    # Text first, then each file; stop at the first item that isn't confirmed so nothing
+    # is retried blindly. Every item's outcome is logged.
+    items = ([("text", text)] if text.strip() else []) + [("file", f) for f, _ in files]
+    results = []
+    for kind, payload in items:
+        start_ns = int((dt.datetime.now(dt.timezone.utc) - EPOCH).total_seconds() * 1e9) - 5 * 10**9
+        if kind == "text":
+            item = "text"
+            rc, err = run_osa(SEND_SCRIPT, payload, guid)
+            status, detail = confirm_in_db(cid, payload, start_ns, CONFIRM_WAIT if rc in (0, None) else 3)
+        else:
+            item = os.path.basename(payload)
+            rc, err = run_osa(SEND_FILE_SCRIPT, stage_file(payload), guid)
+            status, detail = confirm_file_in_db(cid, item, start_ns,
+                                                max(CONFIRM_WAIT, 60) if rc in (0, None) else 3)
+        if status != "confirmed" and err:
+            detail = f"{err}; {detail}"
+        results.append({"item": item, "status": status, "osascript_rc": rc, "detail": detail})
+        if status != "confirmed":
+            break
+    overall = results[-1]["status"]
+    sent = [r["item"] for r in results if r["status"] == "confirmed"]
+    skipped = ["text" if k == "text" else os.path.basename(p) for k, p in items[len(results):]]
+    log_attempt(**base, status=overall, items=results, skipped=skipped, dialog_s=dialog_s,
+                detail=results[-1]["detail"])
+    if overall == "confirmed":
+        print(f"Sent to {label} (confirmed in chat.db): {', '.join(sent)}.")
+        return
+    last = results[-1]
+    msg = (f"{'Not confirmed' if overall == 'unconfirmed' else 'Failed'}: {last['item']}: {last['detail']}."
+           + (f" Already sent: {', '.join(sent)}." if sent else "")
+           + (f" Not attempted: {', '.join(skipped)}." if skipped else ""))
+    if overall == "unconfirmed":
+        msg += " It may still arrive. Check `bluebubble.py read` before retrying."
+    sys.exit(msg)
+
 
 def main():
     p = argparse.ArgumentParser(description="iMessage access for agents")
@@ -452,7 +561,9 @@ def main():
     r = sp.add_parser("read"); r.add_argument("who"); r.add_argument("--limit", type=int, default=50); r.add_argument("--since")
     s = sp.add_parser("search"); s.add_argument("text"); s.add_argument("--who"); s.add_argument("--limit", type=int, default=30); s.add_argument("--since")
     u = sp.add_parser("unread"); u.add_argument("--limit", type=int, default=30)
-    w = sp.add_parser("send"); w.add_argument("who"); w.add_argument("text"); w.add_argument("--dry-run", action="store_true")
+    w = sp.add_parser("send"); w.add_argument("who"); w.add_argument("text", nargs="?", default="")
+    w.add_argument("--file", action="append", metavar="PATH", help="attach a file (repeatable)")
+    w.add_argument("--dry-run", action="store_true")
     mo = sp.add_parser("mode"); mo.add_argument("new", nargs="?", choices=MODES)
     for x in (c, r, s, u, w, mo):
         x.add_argument("--json", action="store_true", default=argparse.SUPPRESS)

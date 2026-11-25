@@ -27,6 +27,11 @@ def build_fixture(d):
     create table message(ROWID integer primary key, date int, is_from_me int, text text, attributedBody blob,
       handle_id int, cache_has_attachments int default 0, is_read int default 1, associated_message_type int default 0);
     create table chat_message_join(chat_id int, message_id int);
+    create table attachment(ROWID integer primary key, filename text, mime_type text, transfer_name text,
+      total_bytes int, transfer_state int, is_outgoing int);
+    create table message_attachment_join(message_id int, attachment_id int);
+    insert into attachment values (1,'~/Library/Messages/Attachments/ab/brief.pdf','application/pdf','brief.pdf',2048,5,0);
+    insert into message_attachment_join values (7,1);
     insert into handle values (1,'+15550001111'),(2,'+15550002222'),(3,'ada@example.com');
     insert into chat values
       (1,'any;-;+15550001111',null,'+15550001111','iMessage'),
@@ -43,9 +48,11 @@ def build_fixture(d):
         (4, 3, T0 + 30, 0, None, typedstream("group says hi\nline two"), 2, 0, 0),
         (5, 4, T0 + 40, 0, None, typedstream("x" * 300), 3, 1, 0),
         (6, 1, T0 + 50, 0, "Loved “hello”", None, 1, 1, 2000),
+        (7, 1, T0 + 60, 0, "\ufffc", None, 1, 1, 0),
     ]
     for r, c, t, me, txt, body, h, rd, a in msgs:
-        db.execute("insert into message values (?,?,?,?,?,?,0,?,?)", (r, t * NS, me, txt, body, h, rd, a))
+        db.execute("insert into message values (?,?,?,?,?,?,?,?,?)",
+                   (r, t * NS, me, txt, body, h, 1 if r == 7 else 0, rd, a))
         db.execute("insert into chat_message_join values (?,?)", (c, r))
     db.commit()
     ab_dir = os.path.join(d, "Sources", "X"); os.makedirs(ab_dir)
@@ -123,6 +130,13 @@ class Read(Base):
         msgs = json.loads(self.run_cli("--json", "read", "Alan, Ada").stdout)
         self.assertEqual({m["chat"] for m in msgs}, {"Book Club 🚀"})
 
+    def test_read_shows_received_attachments(self):
+        msgs = json.loads(self.run_cli("--json", "read", "Grace").stdout)
+        att = next(m for m in msgs if m["id"] == 7)
+        self.assertEqual(att["text"], "[attachment: brief.pdf]")
+        self.assertEqual(att["attachments"][0]["mime"], "application/pdf")
+        self.assertTrue(att["attachments"][0]["path"].startswith(os.path.expanduser("~")))
+
     def test_chats_show_group_members(self):
         out = json.loads(self.run_cli("--json", "chats").stdout)
         club = next(c for c in out if c["chat"] == "Book Club 🚀")
@@ -182,6 +196,30 @@ class Send(Base):
         self.set_mode("hitl")
         r = self.run_cli("send", "any;+;chat123", "hi", "--dry-run")
         self.assertIn("Grace Hopper, Alan Turing", r.stdout)
+
+    def test_file_only_send_lists_attachment(self):
+        self.set_mode("hitl")
+        f = os.path.join(self.tmp.name, "brief.pdf")
+        with open(f, "wb") as fh:
+            fh.write(b"%PDF" + b"0" * 2044)
+        r = self.run_cli("send", "Grace", "--file", f, "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("📎 brief.pdf (2.0 KB)", r.stdout)
+
+    def test_missing_file_refused(self):
+        self.set_mode("hitl")
+        r = self.run_cli("send", "Grace", "hi", "--file", "/nope/missing.pdf", "--dry-run")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Not a file", r.stderr)
+
+    def test_oversized_file_refused(self):
+        self.set_mode("hitl")
+        f = os.path.join(self.tmp.name, "huge.bin")
+        with open(f, "wb") as fh:
+            fh.truncate(101 * 1024 * 1024)  # sparse, no real disk use
+        r = self.run_cli("send", "Grace", "--file", f, "--dry-run")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("limit", r.stderr)
 
     def test_empty_message_refused(self):
         self.set_mode("yolo")

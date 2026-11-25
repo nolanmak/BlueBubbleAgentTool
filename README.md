@@ -21,12 +21,20 @@ bluebubble.py chats  [--limit 20]                       # recent conversations +
 bluebubble.py read   "<name|number|email|group|A, B>" [--limit 50] [--since 7d|2026-11-01]
 bluebubble.py search "<text>" [--who "<name>"] [--since 30d] [--limit 30]
 bluebubble.py unread [--limit 30]
-bluebubble.py send   "<who>" "<text>" [--dry-run]       # gated by write mode
+bluebubble.py send   "<who>" ["<text>"] [--file PATH ...] [--dry-run]   # gated by write mode
 bluebubble.py mode   [read|hitl|yolo]                   # show / change write mode
 bluebubble.py --json <command> ...                      # structured output for agents
 ```
 
-Most message text on recent macOS lives in an `attributedBody` blob, not the `text` column. `bluebubble` decodes it, so reading and search see all of your messages. Tapback reactions are hidden.
+Most message text on recent macOS lives in an `attributedBody` blob, not the `text` column. `bluebubble` decodes it, so reading and search see all of your messages. Tapback reactions are hidden. Received attachments show as `[attachment: name]`; `--json` adds each file's local path and type so an agent can open it.
+
+### Sending files
+
+```bash
+bluebubble.py send "Grace" "here's the deck" --file ~/Downloads/deck.pdf --file ~/Desktop/photo.jpg
+```
+
+Messages can't read files from most folders (the send fails with error 25), so each file is first copied into `~/Library/Messages/Attachments/bluebubble/`; the copy is kept because the sent message points at it. The approval dialog lists every file. The text goes first, then each file, and each one counts as sent only once its transfer completes in `chat.db`. If an item fails, the rest are not attempted and the log records which ones went out. Limit: 100 MB per file.
 
 ## Write modes
 
